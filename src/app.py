@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import select
+import pandas as pd
 from flask_marshmallow import Marshmallow
 import os
 
@@ -11,7 +13,7 @@ basedir = os.path.abspath(os.path.dirname(__file__))
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///" + os.path.join(
     basedir, "stock.sqlite"
 )
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = True
 # Init db
 db = SQLAlchemy(app)
 # Init ma
@@ -51,22 +53,54 @@ class CurrenciesSchema(ma.SQLAlchemyAutoSchema):
 
 @app.route("/stocks/", methods=["GET"])
 def get_products():
-    all_products = Stocks.query.all()
-    results = stocks_schema.dump(all_products)
+    symbol = request.args.get("symbol")
+    if symbol:
+        stocks = Stocks.query.filter(Stocks.symbol == symbol)
+    else:
+        stocks = Stocks.query.all()
+    results = stocks_schema.dump(stocks)
     return jsonify(results)
+
+
+def get_exchange_rate(currency):
+    exchange = Currencies.query.filter(Currencies.symbol == currency)
+    exchange_results = currencies_schema.dump(exchange)
+    return exchange_results
 
 
 # http://localhost:5000/stocks/F?currency=EUR
 @app.route("/stocks/<symbol>", methods=["GET"])
 def get_products_with_symbol(symbol):
-    # currency = request.args.get("currency", default="USD")
-    # exchange = Currencies.query.all()
-    # exchange_results = currencies_schema.dump(exchange)
-    products_with_symbol = Stocks.query.filter(Stocks.symbol == symbol)
-    results = stocks_schema.dump(products_with_symbol)
-    return jsonify(results)
+    currencies_exchange_symbol = {"NOK": "NOK/USD", "EUR": "EUR/USD"}
+    # get request args
+    currency = request.args.get("currency", default="USD")
+    # get results
+    stocks_with_symbol = Stocks.query.filter(Stocks.symbol == symbol)
+    if not currency == "USD":
+        exchange_rate = get_exchange_rate(currencies_exchange_symbol[currency])
+    return jsonify([results[0], exchange_rate[0]])
     # return currency
     # return jsonify(exchange_results)
+
+
+@app.route("/tests/")
+def pandas_test():
+    stock_stmt = select(Stocks).where(Stocks.symbol == "F")
+    stock = pd.read_sql(stock_stmt, db.engine)
+    exchange_stmt = select(Currencies).where(Currencies.symbol == "EUR/USD")
+    exchange = pd.read_sql(exchange_stmt, db.engine)
+    #     symbol = db.Column(db.String(255))
+    # datetime = db.Column(db.DateTime)
+    # open = db.Column(db.Float)
+    # high = db.Column(db.Float)
+    # low = db.Column(db.Float)
+    # close = db.Column(db.Float)
+    # volume = db.Column(db.Float)
+    # pd.DataFrame(
+    #     stock.values * exchange.values, columns=stock.columns, index=stock.index
+    # )
+    exchange = currencies_schema.dump(exchange.to_json)
+    return jsonify(exchange)
 
 
 # Init schema
