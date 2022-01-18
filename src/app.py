@@ -51,25 +51,49 @@ class CurrenciesSchema(ma.SQLAlchemyAutoSchema):
         model = Currencies
 
 
+def apply_exchange_rate(stocks, currency):
+    currencies_exchange_symbol = {"NOK": "NOK/USD", "EUR": "EUR/USD"}
+    if currency == "USD":
+        return stocks
+    exchange = Currencies.query.filter(
+        Currencies.symbol == currencies_exchange_symbol[currency]
+    )
+    i = 0
+    for stock in stocks:
+        try:
+            curr_exchange = exchange[i]
+        except IndexError:
+            break
+        # there are less exchange rates rows than stocks
+        if stock.datetime != curr_exchange.datetime:
+            while stock.datetime < curr_exchange.datetime:
+                try:
+                    curr_exchange = exchange[i]
+                except IndexError:
+                    break
+                i += 1
+
+        stock.open = stock.open / curr_exchange.open
+        stock.high = stock.high / curr_exchange.high
+        stock.low = stock.low / curr_exchange.low
+        stock.close = stock.close / curr_exchange.close
+
+    return stocks
+
+
 @app.route("/stocks/", methods=["GET"])
 def get_products():
     symbol = request.args.get("symbol")
+    currency = request.args.get("currency", default="USD")
     if symbol:
         stocks = Stocks.query.filter(Stocks.symbol == symbol)
     else:
         stocks = Stocks.query.all()
+    stocks = apply_exchange_rate(stocks, currency)
     results = stocks_schema.dump(stocks)
     return jsonify(results)
 
 
-def get_exchange_rate(currency):
-    exchange = Currencies.query.filter(Currencies.symbol == currency)
-    exchange_results = currencies_schema.dump(exchange)
-    return exchange_results
-
-
-# http://localhost:5000/stocks/F?currency=EUR
-@app.route("/stocks/<symbol>", methods=["GET"])
 def get_products_with_symbol(symbol):
     currencies_exchange_symbol = {"NOK": "NOK/USD", "EUR": "EUR/USD"}
     # get request args
