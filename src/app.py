@@ -1,14 +1,15 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import select
-import pandas as pd
-from flask_marshmallow import Marshmallow
 import os
 from itertools import groupby
+
+import pandas as pd
 from dateutil.parser import parse
 from dateutil.relativedelta import relativedelta
-
+from datetime import datetime
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+from flask_marshmallow import Marshmallow
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import select
 
 # Init app
 app = Flask(__name__)
@@ -109,6 +110,7 @@ def get_stocks():
     results = {}
     if output == "raw":
         return jsonify(stocks_json)
+    # structurize results
     for key, group in groupby(stocks_json, key=lambda x: x["symbol"]):
         results[key] = {"full_name": CAR_PRODUCERS[key], "values": list(group)}
 
@@ -118,8 +120,7 @@ def get_stocks():
 @app.route("/cagr", methods=["GET"])
 def calculate_cagr():
     symbol = request.args.get("symbol")
-    start_date = request.args.get("start_date")
-    num_of_years = int(request.args.get("num_of_years"))
+    num_of_years = request.args.get("num_of_years")
 
     def _find_closest_to_date(basic_query, model, ts):
         import math
@@ -147,23 +148,44 @@ def calculate_cagr():
         # if an event is None its diff will always be greater as we set it to infinity
         return gt_event if gt_diff < lt_diff else lt_event
 
-    start_date = parse(start_date)
-    stocks = Stocks.query.filter(Stocks.symbol == symbol)
-    first_stock = _find_closest_to_date(stocks, Stocks, start_date)
-    end_time = first_stock.datetime + relativedelta(years=num_of_years)
-    last_stock = _find_closest_to_date(stocks, Stocks, end_time)
-    cagr = (last_stock.close / first_stock.open) ** (1 / float(num_of_years)) - 1
-    cagr_perc = round(cagr * 100, 2)
+    end_date = datetime.now()
 
-    return jsonify(
-        {
+    def _get_cagr(stock, num_of_years):
+        if num_of_years == "all":
+            num_of_years = relativedelta(stocks[0].datetime, stocks[-1].datetime).years
+        else:
+            num_of_years = int(num_of_years)
+
+        last_stock = _find_closest_to_date(stocks, Stocks, end_date)
+        start_time = last_stock.datetime - relativedelta(years=num_of_years)
+        first_stock = _find_closest_to_date(stocks, Stocks, start_time)
+        cagr = (last_stock.close / first_stock.open) ** (1 / float(num_of_years)) - 1
+        cagr_perc = round(cagr * 100, 2)
+        return {
             "start_date": first_stock.datetime,
             "end_date": last_stock.datetime,
             "first_value": first_stock.open,
             "last_value": last_stock.close,
+            "num_of_years": num_of_years,
             "CAGR": cagr_perc,
         }
-    )
+
+    if symbol:
+        stocks = Stocks.query.filter(Stocks.symbol == symbol)
+        results = _get_cagr(stocks, num_of_years)
+    else:
+
+        # stocks = Stocks.query.all()
+        # sorted_stocks = {}
+        # for key, group in groupby(stocks, key=lambda x: x.symbol):
+        #     cagr = _get_cagr(list(group), num_of_years)
+        #     sorted_stocks[key] = cagr
+        #     return sorted_stocks
+        results = {}
+        for symbol in CAR_PRODUCERS.keys():
+            stocks = Stocks.query.filter(Stocks.symbol == symbol)
+            results[symbol] = _get_cagr(stocks, num_of_years)
+    return jsonify(results)
 
 
 @app.route("/tests/")
