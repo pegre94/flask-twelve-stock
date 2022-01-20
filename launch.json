@@ -1,0 +1,12 @@
+{
+  "configurations": [
+    {
+      "name": "Flask: Remote Attach",
+      "type": "python",
+      "request": "attach",
+      "port": 5000,
+      "host": "localhost",
+      
+    }
+  ]
+}

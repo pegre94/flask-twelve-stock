@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
@@ -6,7 +5,7 @@ from sqlalchemy import select
 import pandas as pd
 from flask_marshmallow import Marshmallow
 import os
-import math
+from itertools import groupby
 from dateutil.parser import parse
 from dateutil.relativedelta import relativedelta
 
@@ -24,6 +23,17 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = True
 db = SQLAlchemy(app)
 # Init ma
 ma = Marshmallow(app)
+# CONSTANTS
+CURRENCIES_EXCHANGE_SYMBOLS = {"NOK": "NOK/USD", "EUR": "EUR/USD"}
+CAR_PRODUCERS = {
+    "TYO": "Toyota Motor Corporation",
+    "GM": "General Motors Company",
+    "HMC": "Honda Motor Company",
+    "RACE": "Ferrari N.V.",
+    "F": "Ford Motor Company",
+    "OSK": "Oshkosh Corporation",
+    "TTM": "Tata Motors Limited",
+}
 
 
 class Stocks(db.Model):
@@ -57,46 +67,51 @@ class CurrenciesSchema(ma.SQLAlchemyAutoSchema):
         model = Currencies
 
 
-def apply_exchange_rate(stocks, currency):
-    currencies_exchange_symbol = {"NOK": "NOK/USD", "EUR": "EUR/USD"}
-    if currency == "USD":
-        return stocks
-    exchange = Currencies.query.filter(
-        Currencies.symbol == currencies_exchange_symbol[currency]
-    )
-    i = 0
-    for stock in stocks:
-        try:
-            curr_exchange = exchange[i]
-        except IndexError:
-            break
-        # there are less exchange rates rows than stocks
-        if stock.datetime != curr_exchange.datetime:
-            while stock.datetime < curr_exchange.datetime:
-                try:
-                    curr_exchange = exchange[i]
-                except IndexError:
-                    break
-                i += 1
-
-        stock.open = stock.open / curr_exchange.open
-        stock.high = stock.high / curr_exchange.high
-        stock.low = stock.low / curr_exchange.low
-        stock.close = stock.close / curr_exchange.close
-
-    return stocks
-
-
 @app.route("/stocks/", methods=["GET"])
-def get_products():
+def get_stocks():
     symbol = request.args.get("symbol")
     currency = request.args.get("currency", default="USD")
+    output = request.args.get("output")
+
+    def _apply_exchange_rate(stocks, currency):
+        if currency == "USD":
+            return stocks
+        exchange = Currencies.query.filter(
+            Currencies.symbol == CURRENCIES_EXCHANGE_SYMBOLS[currency]
+        )
+        i = 0
+        for stock in stocks:
+            try:
+                curr_exchange = exchange[i]
+            except IndexError:
+                break
+            # there are less exchange rates rows than stocks
+            if stock.datetime != curr_exchange.datetime:
+                while stock.datetime < curr_exchange.datetime:
+                    try:
+                        curr_exchange = exchange[i]
+                    except IndexError:
+                        break
+                    i += 1
+
+            stock.open = stock.open / curr_exchange.open
+            stock.high = stock.high / curr_exchange.high
+            stock.low = stock.low / curr_exchange.low
+            stock.close = stock.close / curr_exchange.close
+        return stocks
+
     if symbol:
         stocks = Stocks.query.filter(Stocks.symbol == symbol)
     else:
         stocks = Stocks.query.all()
-    stocks = apply_exchange_rate(stocks, currency)
-    results = stocks_schema.dump(stocks)
+    stocks = _apply_exchange_rate(stocks, currency)
+    stocks_json = stocks_schema.dump(stocks)
+    results = {}
+    if output == "raw":
+        return jsonify(stocks_json)
+    for key, group in groupby(stocks_json, key=lambda x: x["symbol"]):
+        results[key] = {"full_name": CAR_PRODUCERS[key], "values": list(group)}
+
     return jsonify(results)
 
 
